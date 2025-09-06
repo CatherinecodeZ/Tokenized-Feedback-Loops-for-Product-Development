@@ -8,6 +8,12 @@
 (define-constant ERR-MILESTONE-COMPLETED (err u107))
 (define-constant ERR-INVALID-MILESTONE (err u108))
 
+(define-constant REPUTATION-IDEA-SUBMIT u10)
+(define-constant REPUTATION-VOTE-CAST u5)
+(define-constant REPUTATION-IDEA-IMPLEMENTED u50)
+(define-constant REPUTATION-MILESTONE-COMPLETE u25)
+(define-constant REPUTATION-VOTE-ACCURATE u15)
+
 (define-data-var treasury-balance uint u0)
 (define-data-var idea-counter uint u0)
 
@@ -56,6 +62,19 @@
     uint
 )
 
+(define-map user-reputation
+    principal
+    {
+        total-score: uint,
+        ideas-submitted: uint,
+        votes-cast: uint,
+        ideas-implemented: uint,
+        milestones-completed: uint,
+        accurate-votes: uint,
+        last-updated: uint
+    }
+)
+
 (define-public (submit-idea (title (string-ascii 100)) (description (string-ascii 500)) (stake uint))
     (let ((idea-id (+ (var-get idea-counter) u1)))
         (asserts! (>= stake u100) ERR-INVALID-AMOUNT)
@@ -71,6 +90,7 @@
             implemented: false,
             rewards-claimed: false
         })
+        (unwrap-panic (update-reputation tx-sender REPUTATION-IDEA-SUBMIT u1 u0 u0 u0 u0))
         (ok idea-id)
     )
 )
@@ -81,6 +101,7 @@
         (asserts! (not (default-to false (map-get? user-votes vote-key))) ERR-ALREADY-VOTED)
         (map-set user-votes vote-key true)
         (map-set ideas idea-id (merge idea { votes: (+ (get votes idea) u1) }))
+        (unwrap-panic (update-reputation tx-sender REPUTATION-VOTE-CAST u0 u1 u0 u0 u0))
         (ok true)
     )
 )
@@ -89,6 +110,8 @@
     (let ((idea (unwrap! (map-get? ideas idea-id) ERR-IDEA-NOT-FOUND)))
         (asserts! (is-dev-team tx-sender) ERR-NOT-AUTHORIZED)
         (map-set ideas idea-id (merge idea { implemented: true }))
+        (unwrap-panic (update-reputation (get author idea) REPUTATION-IDEA-IMPLEMENTED u0 u0 u1 u0 u0))
+        (unwrap-panic (reward-accurate-voters idea-id))
         (ok true)
     )
 )
@@ -145,6 +168,7 @@
         }))
         (let ((milestone-reward (/ (* (get stake idea) (get reward-percentage milestone)) u100)))
             (try! (as-contract (stx-transfer? milestone-reward (as-contract tx-sender) (get author idea))))
+            (unwrap-panic (update-reputation tx-sender REPUTATION-MILESTONE-COMPLETE u0 u0 u0 u1 u0))
             (ok milestone-reward)
         )
     )
@@ -180,6 +204,25 @@
     )
 )
 
+(define-read-only (get-user-reputation (user principal))
+    (default-to { total-score: u0, ideas-submitted: u0, votes-cast: u0, ideas-implemented: u0, milestones-completed: u0, accurate-votes: u0, last-updated: u0 }
+                (map-get? user-reputation user))
+)
+
+(define-read-only (get-reputation-score (user principal))
+    (get total-score (get-user-reputation user))
+)
+
+(define-read-only (calculate-reputation-multiplier (user principal))
+    (let ((score (get-reputation-score user)))
+        (if (>= score u500) u300
+        (if (>= score u250) u200
+        (if (>= score u100) u150
+        (if (>= score u50) u125
+            u100))))
+    )
+)
+
 (define-private (check-milestone-completion (milestone-id uint) (acc { idea-id: uint, completed: uint, total: uint }))
     (if (<= milestone-id (get total acc))
         (let ((milestone (map-get? idea-milestones { idea-id: (get idea-id acc), milestone-id: milestone-id })))
@@ -190,6 +233,25 @@
         )
         acc
     )
+)
+
+(define-private (update-reputation (user principal) (score-change uint) (idea-delta uint) (vote-delta uint) (impl-delta uint) (milestone-delta uint) (accurate-delta uint))
+    (let ((current-rep (get-user-reputation user)))
+        (map-set user-reputation user {
+            total-score: (+ (get total-score current-rep) score-change),
+            ideas-submitted: (+ (get ideas-submitted current-rep) idea-delta),
+            votes-cast: (+ (get votes-cast current-rep) vote-delta),
+            ideas-implemented: (+ (get ideas-implemented current-rep) impl-delta),
+            milestones-completed: (+ (get milestones-completed current-rep) milestone-delta),
+            accurate-votes: (+ (get accurate-votes current-rep) accurate-delta),
+            last-updated: stacks-block-height
+        })
+        (ok true)
+    )
+)
+
+(define-private (reward-accurate-voters (idea-id uint))
+    (ok true)
 )
 
 (define-private (contract-owner)
