@@ -26,7 +26,8 @@
         stake: uint,
         votes: uint,
         implemented: bool,
-        rewards-claimed: bool
+        rewards-claimed: bool,
+        tags: (list 3 (string-ascii 20))
     }
 )
 
@@ -74,8 +75,8 @@
         last-updated: uint
     }
 )
-
-(define-public (submit-idea (title (string-ascii 100)) (description (string-ascii 500)) (stake uint))
+(define-map tag-ideas (string-ascii 20) (list 10002 uint))
+(define-public (submit-idea (title (string-ascii 100)) (description (string-ascii 500)) (stake uint) (tags (list 3 (string-ascii 20))))
     (let ((idea-id (+ (var-get idea-counter) u1)))
         (asserts! (>= stake u100) ERR-INVALID-AMOUNT)
         (try! (stx-transfer? stake tx-sender (as-contract tx-sender)))
@@ -88,8 +89,10 @@
             stake: stake,
             votes: u0,
             implemented: false,
-            rewards-claimed: false
+            rewards-claimed: false,
+            tags: tags
         })
+        (update-tags tags idea-id)
         (unwrap-panic (update-reputation tx-sender REPUTATION-IDEA-SUBMIT u1 u0 u0 u0 u0))
         (ok idea-id)
     )
@@ -222,7 +225,9 @@
             u100))))
     )
 )
-
+(define-read-only (get-ideas-by-tag (tag (string-ascii 20)))
+    (default-to (list) (map-get? tag-ideas tag))
+)
 (define-private (check-milestone-completion (milestone-id uint) (acc { idea-id: uint, completed: uint, total: uint }))
     (if (<= milestone-id (get total acc))
         (let ((milestone (map-get? idea-milestones { idea-id: (get idea-id acc), milestone-id: milestone-id })))
@@ -253,7 +258,22 @@
 (define-private (reward-accurate-voters (idea-id uint))
     (ok true)
 )
-
+(define-private (update-tag (tag (string-ascii 20)) (idea-id uint))
+    (let ((current (default-to (list) (map-get? tag-ideas tag))))
+        (if (< (len current) u10000)
+            (map-set tag-ideas tag (append current idea-id))
+            true
+        )
+    )
+)
+(define-private (update-tags (tags (list 3 (string-ascii 20))) (idea-id uint))
+    (begin
+        (if (> (len tags) u0) (update-tag (unwrap-panic (element-at tags u0)) idea-id) true)
+        (if (> (len tags) u1) (update-tag (unwrap-panic (element-at tags u1)) idea-id) true)
+        (if (> (len tags) u2) (update-tag (unwrap-panic (element-at tags u2)) idea-id) true)
+        true
+    )
+)
 (define-private (contract-owner)
     tx-sender
 )
