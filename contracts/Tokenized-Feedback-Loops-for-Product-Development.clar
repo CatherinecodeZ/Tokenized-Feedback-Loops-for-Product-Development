@@ -7,6 +7,9 @@
 (define-constant ERR-MILESTONE-NOT-FOUND (err u106))
 (define-constant ERR-MILESTONE-COMPLETED (err u107))
 (define-constant ERR-INVALID-MILESTONE (err u108))
+(define-constant ERR-IDEA-NOT-EXPIRED (err u109))
+
+(define-constant IDEA-EXPIRATION-BLOCKS u100)
 
 (define-constant REPUTATION-IDEA-SUBMIT u10)
 (define-constant REPUTATION-VOTE-CAST u5)
@@ -17,8 +20,8 @@
 (define-data-var treasury-balance uint u0)
 (define-data-var idea-counter uint u0)
 
-(define-map ideas 
-    uint 
+(define-map ideas
+    uint
     {
         author: principal,
         title: (string-ascii 100),
@@ -27,7 +30,8 @@
         votes: uint,
         implemented: bool,
         rewards-claimed: bool,
-        tags: (list 3 (string-ascii 20))
+        tags: (list 3 (string-ascii 20)),
+        submission-block: uint
     }
 )
 
@@ -90,7 +94,8 @@
             votes: u0,
             implemented: false,
             rewards-claimed: false,
-            tags: tags
+            tags: tags,
+            submission-block: stacks-block-height
         })
         (update-tags tags idea-id)
         (unwrap-panic (update-reputation tx-sender REPUTATION-IDEA-SUBMIT u1 u0 u0 u0 u0))
@@ -137,6 +142,20 @@
         (asserts! (is-eq tx-sender (contract-owner)) ERR-NOT-AUTHORIZED)
         (map-set dev-teams team true)
         (ok true)
+    )
+)
+
+(define-public (withdraw-stake-if-expired (idea-id uint))
+    (let ((idea (unwrap! (map-get? ideas idea-id) ERR-IDEA-NOT-FOUND)))
+        (asserts! (is-eq (get author idea) tx-sender) ERR-NOT-AUTHORIZED)
+        (asserts! (not (get implemented idea)) ERR-NOT-IMPLEMENTED)
+        (asserts! (>= stacks-block-height (+ (get submission-block idea) IDEA-EXPIRATION-BLOCKS)) ERR-IDEA-NOT-EXPIRED)
+        (let ((stake-amount (get stake idea)))
+            (try! (as-contract (stx-transfer? stake-amount (as-contract tx-sender) tx-sender)))
+            (var-set treasury-balance (- (var-get treasury-balance) stake-amount))
+            (map-set ideas idea-id (merge idea { stake: u0 }))
+            (ok stake-amount)
+        )
     )
 )
 
@@ -260,8 +279,8 @@
 )
 (define-private (update-tag (tag (string-ascii 20)) (idea-id uint))
     (let ((current (default-to (list) (map-get? tag-ideas tag))))
-        (if (< (len current) u10000)
-            (map-set tag-ideas tag (append current idea-id))
+        (if (< (len current) u10002)
+            (map-set tag-ideas tag (unwrap-panic (as-max-len? (append current idea-id) u10002)))
             true
         )
     )
